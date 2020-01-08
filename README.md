@@ -1,7 +1,7 @@
 # Liverpool-meccsek gólkülönbségeinek modellezése
 ## Kőrösi Péter, Vadász Tamara
 
-# Az elemzés célja:
+## Az elemzés célja:
 
 * Labdarúgó-mérkőzések eredményeinek előrejelzése
   + egy csapat kiválasztása (Liverpool)
@@ -10,9 +10,9 @@
   + lineáris regresszió és PCA
 * a becsült modell alapján predikció az idei szezonra
 
-# Az adatok
+## Az adatok
 
-## Forrás: [football-data.co.uk](https://www.football-data.co.uk/englandm.php)
+### Forrás: [football-data.co.uk](https://www.football-data.co.uk/englandm.php)
 
 Premier League
 2000/01 - 2019/20
