@@ -1,8 +1,10 @@
 ---
 title: "Liverpool-meccsek gólkülönbségeinek modellezése"
 author: "Kőrösi Péter, Vadász Tamara"
-date: '2020.01.08'
-output: html_document
+date: "2020.01.08"
+output:
+  html_document: default
+  pdf_document: default
 ---
 
 # Az elemzés célja:
@@ -224,7 +226,7 @@ to_model_test <- test_data[, .(goal_difference,
 ggplot(data=train_data, aes(goal_difference)) + 
   geom_histogram() +
   xlab("Gólkülönbség") + 
-  ylab("Gyakoriság")
+  ylab("Gyakoriság") + theme_minimal()
 ```
 
 ## Az átlagos gólkülönbség hazai pályán és idegenben
@@ -237,8 +239,8 @@ train_data[, mean(goal_difference), by=home]
 ## A gólkülönbségek eloszlása hazai pályán és idegenben
 </center>
 
-0: idegenben
-1: hazai pálya
+* 0: idegenben
+* 1: hazai pálya
 
 ```{r home_plot, echo=FALSE, warning=FALSE, fig.align="center"}
 ggplot(data=train_data, aes(goal_difference)) + geom_histogram() + 
@@ -246,7 +248,6 @@ ggplot(data=train_data, aes(goal_difference)) + geom_histogram() +
   xlab("Gólkülönbség") + 
   ylab("Gyakoriság") + 
   theme_minimal()
-
 ```
 
 # Lineáris regresszió
@@ -254,7 +255,7 @@ ggplot(data=train_data, aes(goal_difference)) + geom_histogram() +
 A teljes train adaton
 Stepwise szelekció: AIC alapján
 
-```{r lm}
+```{r regression}
 lm_full <- lm(goal_difference ~ ., data=to_model)
 step <- stepAIC(lm_full, trace=FALSE)
 
@@ -270,7 +271,7 @@ Szignifikáns változók:
 * Az előző meccs gólkülönsége (10%-on)
 
 
-## A gólkülöönbségek előrejelzése a teszt adatokon (19/20-as szezon)
+## A gólkülönbségek előrejelzése a teszt adatokon (19/20-as szezon)
 
 
 ```{r lm_pred}
@@ -299,7 +300,7 @@ prop_varex <- pr_var/sum(pr_var)
 
 plot(cumsum(prop_varex), xlab = "Elsődleges komponens",
      ylab = "Kumulatív magyarázott variancia",
-     type = "b") + theme_classic()
+     type = "b")
 ```
 
 ## A modell kialakítása a kapott komponensekből
