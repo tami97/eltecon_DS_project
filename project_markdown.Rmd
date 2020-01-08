@@ -1,0 +1,355 @@
+---
+title: "Liverpool-meccsek gólkülönbségeinek modellezése"
+author: "Kőrösi Péter, Vadász Tamara"
+date: '2020.01.08'
+output: html_document
+---
+
+# Az elemzés célja:
+
+* Labdarúgó-mérkőzések eredményeinek előrejelzése
+  + egy csapat kiválasztása (Liverpool)
+  + az adott csapat meccseinek elemzése korábbi eredmények alapján
+* 2 modell készítése az eddigi szezonok alapján
+  + lineáris regresszió és PCA
+* a becsült modell alapján predikció az idei szezonra
+
+
+```{r libraries, echo=FALSE, include=FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(rpart)
+```
+
+# Az adatok
+
+## Forrás: [football-data.co.uk](https://www.football-data.co.uk/englandm.php)
+
+Premier League
+2000/01 - 2019/20
+Liverpool-meccsek
+
+*Az adatokat letöltő fájl: data_download.ipynb (python)*
+
+A változók:
+
+* Szezon (year)
+* Meccs (match)
+  + a meccs sorszáma az adott szezonon belül
+* Hazai páya (home)
+  + dummy (1: Liverpool hazai pálya, 0: Liverpool idegenben)
+* Ellenfél (OTHER)
+* Gólkülönbség (goal_difference)
+  + Liverpool góljainak száma - ellenfél góljainak száma
+* Félidei gólkülönbség (half_time_goal_difference)
+  + Liverpool góljainak száma a félidőben - ellenfél góljainak száma a félidőben
+* A meccs végén a Liverpool pontszáma a szezonban (points)
+ + győzelem: +3 pont
+ + döntetlen: +1 pont
+ + vereség: 0 pont
+
+A következő változók mindkét csapatra (Liverpool: L_\*, Ellenfél: O_\*)
+  
+* Lőtt gólók száma (goals)
+* Lőtt gólok száma félidőben (half_time_goals)
+* Lövések száma (shots)
+* Kaput eltaláló lövések száma (shots_on_target)
+* Szögletek (corners)
+* Elkövetett szabálytalanságok (fouls_commited)
+* Sárga lapok (yellow_cards)
+* Piros lapok (red_cards)
+
+```{r data, echo=FALSE}
+data <- fread('data/Liverpool_football_data.csv')
+```
+
+# TRAIN adattábla kialakítása
+
+## train adat: 2003/04 - 2018/19 szezonok
+
+A letöltött adatokból több új magyarázó változót is készítünk.
+
+
+### A következő függvény 3 új változót hoz létre:
+
+* Mindhárom változót a Liverpool és az adott ellenfél közti korábbi meccsek alapján számoljuk
+* Meccsenkénti átlagos érték érték az előző 3 szezon alapján
+  + A Liverpool által lőtt gólok átlagos száma
+  + Az ellenfél által lőtt gólok átlagos száma
+  + A Liverpool kaput eltaláló lövéseinek átlagos száma
+* Amennyiben a Liverpool nem játszott az adott csapattal a vizsgált időszakban, ott 0 szerepel mindegyik változónál.
+
+```{r}
+get_team_data <- function(season){
+  team_data <- data.table(team=character(),
+                          mean_goals_scored=numeric(), 
+                          mean_goals_received=numeric(), 
+                          mean_shots_on_target=numeric())
+  
+  for (l in 1:19){
+    temp <- seasonsbefore[OTHER == unique(season$OTHER)[l]]
+    row <- data.table(team=unique(season$OTHER)[l],
+                      mean_goals_scored=mean(temp$L_goals), 
+                      mean_goals_received=mean(temp$O_goals), 
+                      mean_shots_on_target=mean(temp$L_shots_on_target))
+    team_data <- rbindlist(list(team_data, row))
+  }
+  
+  team_data[is.na(team_data)] <- 0
+  
+  
+  for (l in 1:19){
+    season[OTHER==unique(season$OTHER)[l], 
+           mean_goals_scored:=team_data[team==unique(season$OTHER)[l], mean_goals_scored]]
+    season[OTHER==unique(season$OTHER)[l], 
+           mean_goals_received:=team_data[team==unique(season$OTHER)[l], mean_goals_received]]
+    season[OTHER==unique(season$OTHER)[l], 
+           mean_shots_on_target:=team_data[team==unique(season$OTHER)[l], mean_shots_on_target]]
+  }
+  return(season)
+}
+```
+
+### Az előző függvény lefuttatása a train adattáblára
+
+```{r train}
+train_data <- data.table()
+
+for (i in 0:15){
+  season <- data[year == paste(formatC(3+i, width=2, flag="0"), formatC(4+i, width=2, flag="0"), sep="-")]
+  seasonsbefore <- data[year %in% c(paste(formatC(0+i, width=2, flag="0"), formatC(1+i, width=2, flag="0"), sep="-"), 
+                                    paste(formatC(1+i, width=2, flag="0"), formatC(2+i, width=2, flag="0"), sep="-"),
+                                    paste(formatC(2+i, width=2, flag="0"), formatC(3+i, width=2, flag="0"), sep="-"))]
+  
+  season <- get_team_data(season)
+  
+  train_data <- rbindlist(list(train_data, season))
+}
+```
+
+## A korábbi meccsek eredményeit leíró változók létrehozása
+
+Az előző 3 meccs eredményei:
+
+* Gólkülönbség
+* Liverpool által kaput eltaláló lövések száma
+
+Az előző 1 meccs eredménye:
+
+* A Liverpool által kapott sárga lapok
+
+```{r train_lags}
+train_data[, goal_difference_lag1 := lag(train_data$goal_difference, n=1)]
+train_data[, goal_difference_lag2 := lag(train_data$goal_difference, n=2)]
+train_data[, goal_difference_lag3 := lag(train_data$goal_difference, n=3)]
+train_data[, L_shots_on_target_lag1 := lag(train_data$L_shots_on_target, n=1)]
+train_data[, L_shots_on_target_lag2 := lag(train_data$L_shots_on_target, n=2)]
+train_data[, L_shots_on_target_lag3 := lag(train_data$L_shots_on_target, n=3)]
+train_data[, yellow_cards_lag1 := lag(train_data$L_yellow_cards, n=1)]
+train_data[is.na(train_data)] <- 0
+```
+
+## A modellekhez felhasznált adattábla kialakítása:
+
+A felhasznált változók:
+
+* Hazai páya
+* Liverpool által lőtt gólok átlagos száma
+* Az ellenfél által lőtt gólok átlagos száma
+* A Liverpool kaput eltaláló lövéseinek átlagos száma
+* Az előző 3 meccs gólkülönbségei
+* Az előző 3 meccsen a Liverpool kaput eltaláló lövéseinek száma
+* Az előző meccsen a Liverpool által kapott sárga lapok száma
+
+```{r train_final}
+to_model <- train_data[, .(goal_difference, 
+                           home, 
+                           mean_goals_scored, 
+                           mean_goals_received, 
+                           mean_shots_on_target,
+                           goal_difference_lag1,
+                           goal_difference_lag2,
+                           goal_difference_lag3,
+                           L_shots_on_target_lag1,
+                           L_shots_on_target_lag2,
+                           L_shots_on_target_lag3,
+                           yellow_cards_lag1)]
+```
+
+# TESZT adattábla kialakítása
+
+## teszt adat: 2019/20-as szezon
+
+Az előzőekben leírt adatszerkezet kialakítása
+
+```{r test}
+# test_data letrehozasa
+season <- data[year == "19-20"]
+seasonsbefore <- data[year %in% c("16-17", "17-18", "18-19")]
+
+test_data <- get_team_data(season)
+
+test_data[, goal_difference_lag1 := lag(test_data$goal_difference, n=1)]
+test_data[, goal_difference_lag2 := lag(test_data$goal_difference, n=2)]
+test_data[, goal_difference_lag3 := lag(test_data$goal_difference, n=3)]
+test_data[, L_shots_on_target_lag1 := lag(test_data$L_shots_on_target, n=1)]
+test_data[, L_shots_on_target_lag2 := lag(test_data$L_shots_on_target, n=2)]
+test_data[, L_shots_on_target_lag3 := lag(test_data$L_shots_on_target, n=3)]
+test_data[, yellow_cards_lag1 := lag(test_data$L_yellow_cards, n=1)]
+test_data[is.na(test_data)] <- 0
+
+to_model_test <- test_data[, .(goal_difference, 
+                               home, 
+                               mean_goals_scored, 
+                               mean_goals_received, 
+                               mean_shots_on_target,
+                               goal_difference_lag1,
+                               goal_difference_lag2,
+                               goal_difference_lag3,
+                               L_shots_on_target_lag1,
+                               L_shots_on_target_lag2,
+                               L_shots_on_target_lag3,
+                               yellow_cards_lag1)]
+```
+
+# A kapott változók vizsgálata
+
+<center>
+## A gólkülönbségek eloszlása (train adatok)
+</center>
+
+```{r goal_difference_plot, echo=FALSE, warning=FALSE, fig.align="center"}
+ggplot(data=train_data, aes(goal_difference)) + 
+  geom_histogram() +
+  xlab("Gólkülönbség") + 
+  ylab("Gyakoriság")
+```
+
+## Az átlagos gólkülönbség hazai pályán és idegenben
+
+```{r home_distribution}
+train_data[, mean(goal_difference), by=home]
+```
+
+<center>
+## A gólkülönbségek eloszlása hazai pályán és idegenben
+</center>
+
+0: idegenben
+1: hazai pálya
+
+```{r home_plot, echo=FALSE, warning=FALSE, fig.align="center"}
+ggplot(data=train_data, aes(goal_difference)) + geom_histogram() + 
+  facet_wrap(~ as.factor(home)) +
+  xlab("Gólkülönbség") + 
+  ylab("Gyakoriság") + 
+  theme_minimal()
+
+```
+
+# Lineáris regresszió
+
+A teljes train adaton
+Stepwise szelekció: AIC alapján
+
+```{r lm}
+lm_full <- lm(goal_difference ~ ., data=to_model)
+step <- stepAIC(lm_full, trace=FALSE)
+
+summary(step)
+```
+
+## A kapott modell:
+
+Szignifikáns változók:
+
+* Hazai pálya (1%-on)
+* Az átlagos kapott gólok száma (1%-on)
+* Az előző meccs gólkülönsége (10%-on)
+
+
+## A gólkülöönbségek előrejelzése a teszt adatokon (19/20-as szezon)
+
+
+```{r lm_pred}
+lm_pred <- predict(step, to_model_test)
+```
+
+# PCA
+
+## A PCA elemzés:
+
+``` {r PCA}
+pca <- prcomp(to_model, scale = TRUE)
+
+```
+
+<center>
+## A kapott komponensek vizsgálata
+</center>
+
+A komponensek által magyarázott variancia kiszámítása és ábrázolása
+
+```{r PCA_components, echo=FALSE, warning=FALSE, fig.align="center"}
+std_dev <- pca$sdev
+pr_var <- std_dev^2
+prop_varex <- pr_var/sum(pr_var)
+
+plot(cumsum(prop_varex), xlab = "Elsődleges komponens",
+     ylab = "Kumulatív magyarázott variancia",
+     type = "b") + theme_classic()
+```
+
+## A modell kialakítása a kapott komponensekből
+
+```{r PCA_model}
+train.data <- data.frame(goal_difference = to_model$goal_difference, pca$x)
+rpart.model <- rpart(goal_difference ~ .,data = train.data, method = "anova")
+
+```
+
+## A gólkülönbség előrejelzése a PCA modell alapján a teszt adatokon
+
+```{r PCA_pred}
+test.data <- predict(pca, newdata = to_model_test)
+test.data <- as.data.frame(test.data)
+
+rpart.prediction <- predict(rpart.model, test.data)
+pca_pred <- rpart.prediction
+```
+
+# Eredmények
+
+A két modell által becsült adatok összehasonlítása a megfigyelt eredménnyel
+
+
+```{r results, echo=FALSE, warning=FALSE, fig.align="center", fig.width=10}
+results <- data.table(goal_difference=to_model_test$goal_difference,
+                      lm_prediction=lm_pred,
+                      pca_prediction=pca_pred)
+results[, match := as.integer(row.names(results))]
+
+
+ggplot(data=results, aes(x=match)) +
+  geom_line(aes(y=goal_difference, color="Megfigyelés")) +
+  geom_line(aes(y=lm_prediction, color="Regressziós becslés")) +
+  geom_line(aes(y=pca_prediction, color="PCA becslés")) +
+  xlab("Meccs") + 
+  ylab("Gólkülönbség") + 
+  theme(legend.title = element_blank()) + 
+  theme_minimal()
+```
+
+## A modellek értékelése
+
+A valós adatoktól való átlagos abszolút eltérés (Lineáris regresszió, PCA)
+
+```{r mean_difference}
+c(mean(sqrt(abs(results$goal_difference - results$lm_prediction))), 
+  mean(sqrt(abs(results$goal_difference - results$pca_prediction))))
+
+```
+
+A kapott eredmények alapján a lineáris modell jobb becslést ad.
