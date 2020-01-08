@@ -18,8 +18,6 @@ Premier League
 2000/01 - 2019/20
 Liverpool-meccsek
 
-*Az adatokat letöltő fájl: data_download.ipynb (python)*
-
 A változók:
 
 * Szezon (year)
@@ -47,3 +45,7 @@ A következő változók mindkét csapatra (Liverpool: L_\*, Ellenfél: O_\*)
 * Elkövetett szabálytalanságok (fouls_commited)
 * Sárga lapok (yellow_cards)
 * Piros lapok (red_cards)
+
+## Adatok: data/Liverpool_football_data.csv
+## Az adatokat letöltő fájl: data_download.ipynb (python)
+## Az elemzés és leírása: project_markdown.Rmd
